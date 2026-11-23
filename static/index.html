@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <script>
+    try {
+      document.querySelector('meta[name="color-scheme"]').content =
+        localStorage.getItem("color-scheme") ?? "light dark";
+    } catch {}
+  </script>
+  <title>Rate Limiter Playground</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="page-layout">
+    <header class="site-header">
+      <div class="brand">
+        <h1>Rate Limiter Playground</h1>
+        <span id="backend-badge" class="badge">Backend: loading…</span>
+      </div>
+      <div class="header-actions">
+        <button type="button" class="btn-secondary" command="show-modal" commandfor="rules-dialog">
+          Rules &amp; Headers
+        </button>
+        <button type="button" id="theme-toggle" class="btn-icon" aria-live="off">
+          <span class="theme-opt theme-opt--to-dark">
+            <span aria-hidden="true">🌙</span>
+            <span class="visually-hidden">Switch to dark theme</span>
+          </span>
+          <span class="theme-opt theme-opt--to-light">
+            <span aria-hidden="true">☀️</span>
+            <span class="visually-hidden">Switch to light theme</span>
+          </span>
+        </button>
+      </div>
+    </header>
+
+    <aside class="controls-panel" aria-labelledby="controls-heading">
+      <h2 id="controls-heading">Request Simulator</h2>
+
+      <form id="backend-form" class="backend-form" novalidate>
+        <fieldset class="route-fieldset">
+          <legend>Limiter Backend</legend>
+          <label class="radio-option" for="backend-memory">
+            <input type="radio" id="backend-memory" name="backend" value="in-memory" checked>
+            <span>In-Memory <small>(single process)</small></span>
+          </label>
+          <label class="radio-option" for="backend-redis">
+            <input type="radio" id="backend-redis" name="backend" value="redis">
+            <span>Redis <small>(Lua atomic + circuit breaker)</small></span>
+          </label>
+        </fieldset>
+
+        <div class="field" id="redis-url-field" hidden>
+          <label for="redis-url">Redis URL</label>
+          <span id="redis-url-hint" class="hint">
+            Example: <code>redis://localhost:6379/0</code>
+          </span>
+          <input
+            type="text"
+            id="redis-url"
+            name="redisUrl"
+            value="redis://localhost:6379/0"
+            pattern="rediss?://\S+"
+            aria-describedby="redis-url-hint"
+            data-error="redis-url-error"
+          >
+          <div id="redis-url-error" class="error-msg">
+            <span role="img" aria-label="Error">✕</span>
+            Enter a valid URL starting with <code>redis://</code> or <code>rediss://</code>.
+          </div>
+        </div>
+
+        <div class="backend-actions">
+          <button type="submit" class="btn-secondary">Apply Backend</button>
+          <span id="redis-health" class="muted" aria-live="polite"></span>
+        </div>
+      </form>
+
+      <hr class="panel-divider">
+
+      <form id="sim-form" novalidate>
+        <fieldset class="route-fieldset">
+          <legend>Target Route</legend>
+          <label class="radio-option" for="route-search">
+            <input type="radio" id="route-search" name="route" value="/search" checked>
+            <span><code>GET /search</code> <small>(100/min, burst 20)</small></span>
+          </label>
+          <label class="radio-option" for="route-login">
+            <input type="radio" id="route-login" name="route" value="/login">
+            <span><code>POST /login</code> <small>(10/min, burst 5)</small></span>
+          </label>
+        </fieldset>
+
+        <div class="field">
+          <label for="api-key">Client API Key (<code>x-api-key</code>)</label>
+          <span id="api-key-hint" class="hint">
+            1–64 letters, digits, or <code>._:-</code>. Each key gets its own token bucket.
+          </span>
+          <input
+            type="text"
+            id="api-key"
+            name="apiKey"
+            value="demo-client"
+            required
+            pattern="[A-Za-z0-9._:\-]{1,64}"
+            autocomplete="off"
+            aria-describedby="api-key-hint"
+            data-error="api-key-error"
+          >
+          <div id="api-key-error" class="error-msg">
+            <span role="img" aria-label="Error">✕</span>
+            Enter 1–64 characters using letters, numbers, dots, underscores, colons, or hyphens.
+          </div>
+        </div>
+
+        <div class="field">
+          <div class="field-row">
+            <label for="burst-count">Burst Size</label>
+            <output id="burst-output" for="burst-slider burst-count">5 requests</output>
+          </div>
+          <span id="burst-hint" class="hint">Between 1 and 50 requests per burst.</span>
+          <input
+            type="range"
+            id="burst-slider"
+            min="1"
+            max="50"
+            value="5"
+            aria-label="Burst size slider"
+          >
+          <input
+            type="number"
+            id="burst-count"
+            name="burstCount"
+            min="1"
+            max="50"
+            value="5"
+            required
+            aria-describedby="burst-hint"
+            data-error="burst-error"
+          >
+          <div id="burst-error" class="error-msg">
+            <span role="img" aria-label="Error">✕</span>
+            Enter a whole number from 1 to 50.
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="checkbox-option" for="parallel-mode">
+            <input type="checkbox" id="parallel-mode" name="parallel" class="accent-check" checked>
+            <span>Send burst in parallel (<code>Promise.all</code>)</span>
+          </label>
+        </div>
+
+        <div class="action-bar">
+          <button type="submit" id="send-single-btn" class="btn-primary" data-mode="single">
+            Send 1 Request
+          </button>
+          <button type="submit" id="send-burst-btn" class="btn-secondary" data-mode="burst">
+            Send Burst
+          </button>
+          <button type="button" id="clear-log-btn" class="btn-ghost">
+            Clear Log
+          </button>
+        </div>
+      </form>
+    </aside>
+
+    <main class="dashboard-main">
+      <section class="buckets-section" aria-labelledby="buckets-heading">
+        <div class="section-header">
+          <h2 id="buckets-heading">Token Buckets</h2>
+          <p id="active-client-label" class="muted">Client: <code>demo-client</code></p>
+        </div>
+        <div class="card-grid" id="bucket-cards">
+          <article class="bucket-card" data-route="/search">
+            <div class="bucket-card-header">
+              <h3><code>GET /search</code></h3>
+              <span class="status-pill status-pill--idle" data-field="status">Idle</span>
+            </div>
+            <div class="bucket-meter">
+              <div class="meter-labels">
+                <span>Remaining</span>
+                <strong data-field="remaining">20 / 20</strong>
+              </div>
+              <progress data-field="progress" max="20" value="20">20 / 20</progress>
+            </div>
+            <dl class="bucket-meta">
+              <div><dt>Rate</dt><dd>100 / min</dd></div>
+              <div><dt>Reset</dt><dd data-field="reset">0s</dd></div>
+              <div><dt>Retry-After</dt><dd data-field="retry">—</dd></div>
+            </dl>
+          </article>
+
+          <article class="bucket-card" data-route="/login">
+            <div class="bucket-card-header">
+              <h3><code>POST /login</code></h3>
+              <span class="status-pill status-pill--idle" data-field="status">Idle</span>
+            </div>
+            <div class="bucket-meter">
+              <div class="meter-labels">
+                <span>Remaining</span>
+                <strong data-field="remaining">5 / 5</strong>
+              </div>
+              <progress data-field="progress" max="5" value="5">5 / 5</progress>
+            </div>
+            <dl class="bucket-meta">
+              <div><dt>Rate</dt><dd>10 / min</dd></div>
+              <div><dt>Reset</dt><dd data-field="reset">0s</dd></div>
+              <div><dt>Retry-After</dt><dd data-field="retry">—</dd></div>
+            </dl>
+          </article>
+        </div>
+      </section>
+
+      <section class="log-section" aria-labelledby="log-table-caption">
+        <div class="section-header">
+          <h2 id="log-table-caption">Request Log</h2>
+          <p id="log-summary" class="muted" aria-live="polite">0 requests sent</p>
+        </div>
+        <div tabindex="0" role="region" aria-labelledby="log-table-caption" class="table-wrapper">
+          <table class="log-table">
+            <caption class="visually-hidden">Recent rate-limited HTTP requests and responses</caption>
+            <thead>
+              <tr>
+                <th scope="col">#</th>
+                <th scope="col">Time</th>
+                <th scope="col">Route</th>
+                <th scope="col">Client</th>
+                <th scope="col">Status</th>
+                <th scope="col">Remaining</th>
+                <th scope="col">Reset</th>
+                <th scope="col">Details</th>
+              </tr>
+            </thead>
+            <tbody id="log-tbody">
+              <tr class="empty-row">
+                <td colspan="8">Send a request or burst to see live token-bucket responses.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Rules & Headers Modal (Declarative Invoker + closedby="any") -->
+  <dialog id="rules-dialog" closedby="any" aria-labelledby="rules-dialog-title">
+    <div class="dialog-header">
+      <h2 id="rules-dialog-title">Rate Limit Rules &amp; Headers</h2>
+      <form method="dialog">
+        <button type="submit" class="btn-icon" aria-label="Close dialog">✕</button>
+      </form>
+    </div>
+    <div class="dialog-body">
+      <p>
+        Each route uses an independent token bucket keyed by <code>x-api-key</code> (or client IP) plus route path.
+      </p>
+      <dl class="rules-dl">
+        <div>
+          <dt><code>RateLimit-Limit</code></dt>
+          <dd>Maximum burst capacity of the bucket.</dd>
+        </div>
+        <div>
+          <dt><code>RateLimit-Remaining</code></dt>
+          <dd>Whole tokens left after this request.</dd>
+        </div>
+        <div>
+          <dt><code>RateLimit-Reset</code></dt>
+          <dd>Seconds until the bucket refills to full capacity.</dd>
+        </div>
+        <div>
+          <dt><code>Retry-After</code></dt>
+          <dd>Present on HTTP <code>429</code> responses; seconds until 1 token is available.</dd>
+        </div>
+      </dl>
+    </div>
+    <form method="dialog" class="dialog-footer">
+      <button type="submit" value="close" class="btn-primary" autofocus>Got it</button>
+    </form>
+  </dialog>
+
+  <!-- Request Inspector Modal -->
+  <dialog id="inspect-dialog" closedby="any" aria-labelledby="inspect-dialog-title">
+    <div class="dialog-header">
+      <h2 id="inspect-dialog-title">Request Details</h2>
+      <form method="dialog">
+        <button type="submit" class="btn-icon" aria-label="Close dialog">✕</button>
+      </form>
+    </div>
+    <div class="dialog-body">
+      <dl id="inspect-summary" class="rules-dl"></dl>
+      <h3>Response Headers</h3>
+      <pre><code id="inspect-headers"></code></pre>
+      <h3>Response Body</h3>
+      <pre><code id="inspect-body"></code></pre>
+    </div>
+    <form method="dialog" class="dialog-footer">
+      <button type="submit" value="close" class="btn-primary" autofocus>Close</button>
+    </form>
+  </dialog>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
